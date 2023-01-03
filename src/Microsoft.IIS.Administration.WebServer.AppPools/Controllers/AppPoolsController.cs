@@ -74,8 +74,11 @@ namespace Microsoft.IIS.Administration.WebServer.AppPools
                 return null;
             }
 
-            // Save it
             ManagementUnit.ServerManager.ApplicationPools.Add(pool);
+
+            AppPoolHelper.UpdateEnvironmentVariables(pool, model);
+
+            // Save it
             ManagementUnit.Current.Commit();
 
             // Refresh

@@ -67,9 +67,54 @@ namespace Microsoft.IIS.Administration.WebServer.AppPools
 
             if (appPool != null) {
                 SetAppPool(appPool, model);
+                UpdateEnvironmentVariables(appPool, model);
             }
 
             return appPool;
+        }
+
+        public static void UpdateEnvironmentVariables(ApplicationPool pool, dynamic model)
+        {
+            if (model.environment_variables is JObject environmentVariables && environmentVariables.Count > 0)
+            {
+                var environmentVariablesCollection = GetEnvironmentVariablesCollection(pool);
+
+                var hsActiveVariables = new HashSet<string>();
+
+                // Add new environment variables
+                foreach (var variable in environmentVariables)
+                {
+                    var variableName = variable.Key;
+                    var variableValue = variable.Value.ToString();
+
+                    hsActiveVariables.Add(variableName);
+
+                    var addEnvVariable = environmentVariablesCollection.FirstOrDefault(
+                        x => string.Equals((string)x["name"], variableName, StringComparison.InvariantCultureIgnoreCase));
+
+                    var isNew = false;
+
+                    if (addEnvVariable == null)
+                    {
+                        addEnvVariable = environmentVariablesCollection.CreateElement("add");
+                        addEnvVariable["name"] = variableName;
+                        isNew = true;
+                    }
+
+                    if (!string.Equals((string)addEnvVariable["value"], variableValue))
+                        addEnvVariable["value"] = variableValue;
+
+                    if (isNew)
+                        environmentVariablesCollection.Add(addEnvVariable);
+                }
+
+                // And remove old ones
+                foreach (var variable in environmentVariablesCollection)
+                {
+                    if (!hsActiveVariables.Contains(variable["name"]))
+                        environmentVariablesCollection.Remove(variable);
+                }
+            }
         }
 
         public static void DeleteAppPool(ApplicationPool pool)
@@ -250,6 +295,20 @@ namespace Microsoft.IIS.Administration.WebServer.AppPools
                     orphan_action_exe = pool.Failure.OrphanActionExe,
                     orphan_action_params = pool.Failure.OrphanActionParams,
                 };
+            }
+
+            //
+            // environment_variables
+            if (fields.Exists("environment_variables"))
+            {
+                var environmentVariablesCollection = GetEnvironmentVariablesCollection(pool);
+
+                var expando = new ExpandoObject();
+
+                foreach (var addElement in environmentVariablesCollection)
+                    expando.TryAdd(addElement["name"].ToString(), addElement["value"].ToString());
+
+                obj.environment_variables = expando;
             }
 
             return Core.Environment.Hal.Apply(Defines.Resource.Guid, obj, full);
@@ -518,6 +577,50 @@ namespace Microsoft.IIS.Administration.WebServer.AppPools
             }
 
             pool.Name = name;
+        }
+
+        private static ConfigurationElementCollection GetEnvironmentVariablesCollection(ApplicationPool pool)
+        {
+            var config = ManagementUnit.ServerManager.GetApplicationHostConfiguration();
+
+            var applicationPoolsSection = config.GetSection("system.applicationHost/applicationPools");
+            var applicationPoolsCollection = applicationPoolsSection.GetCollection();
+
+            var poolElement = FindElement(applicationPoolsCollection, "add", "name", pool.Name);
+
+            if (poolElement == null)
+                throw new InvalidOperationException("Couldn't find ApplicationPool Element in system.applicationHost/applicationPools.");
+
+            return poolElement.GetCollection("environmentVariables");
+        }
+        private static ConfigurationElement? FindElement(ConfigurationElementCollection collection, string elementTagName, params string[] keyValues)
+        {
+            foreach (var element in collection)
+            {
+                if (string.Equals(element.ElementTagName, elementTagName, StringComparison.OrdinalIgnoreCase))
+                {
+                    bool matches = true;
+                    for (int i = 0; i < keyValues.Length; i += 2)
+                    {
+                        object o = element.GetAttributeValue(keyValues[i]);
+                        string? value = null;
+
+                        if (o != null)
+                            value = o.ToString();
+
+                        if (!string.Equals(value, keyValues[i + 1], StringComparison.OrdinalIgnoreCase))
+                        {
+                            matches = false;
+                            break;
+                        }
+                    }
+
+                    if (matches)
+                        return element;
+                }
+            }
+
+            return null;
         }
     }
 }
